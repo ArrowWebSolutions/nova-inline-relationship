@@ -45,6 +45,10 @@ class NovaInlineRelationship extends Field
      */
     private $resourceClass;
 
+    /** closure to test if it can be deleted */
+    protected $deleteCallback;
+
+
     /**
      * Pass resourceClass to NovaInlineRelationship.
      *
@@ -55,6 +59,18 @@ class NovaInlineRelationship extends Field
     public function resourceClass(string $class): self
     {
         $this->resourceClass = $class;
+
+        return $this;
+    }
+
+    /**
+     * Pass closoure into the relationship to determine if it's deletable.
+     * @param  callable $callback
+     * @return NovaInlineRelationship
+     */
+    public function canDelete(callable $callback)
+    {
+        $this->deleteCallback = $callback;
 
         return $this;
     }
@@ -145,7 +161,12 @@ class NovaInlineRelationship extends Field
      */
     public function isRelationshipDeletable(Model $model, $relation): bool
     {
-        return ! ($model->{$relation}() instanceof BelongsTo);
+        if ($model->{$relation}() instanceof BelongsTo) {
+            return false;
+        } elseif ($this->deleteCallback) {
+            return ($this->deleteCallback)($model);
+        }
+        return true;
     }
 
     /**
@@ -214,6 +235,10 @@ class NovaInlineRelationship extends Field
             $class->withMeta(['extraAttributes' => [
                 'placeholder' => $item['placeholder'],
             ]]);
+        }
+
+        if (! empty($item['readonly'])) {
+            $class->readonly($item['readonly']);
         }
 
         $item['meta'] = $class->jsonSerialize();
@@ -314,6 +339,8 @@ class NovaInlineRelationship extends Field
         /** @var Resource $resource */
         $resource = ! empty($this->resourceClass) ? new $this->resourceClass($model) : Nova::newResourceFromModel($model->{$attribute}()->getRelated());
 
+        $request = app(NovaRequest::class);
+
         return collect($resource->availableFields(new NovaRequest()))->reject(function ($field) use ($resource) {
             return $field instanceof ListableField ||
                 $field instanceof ResourceToolElement ||
@@ -324,8 +351,15 @@ class NovaInlineRelationship extends Field
                 ! $field->showOnUpdate;
         })->reject(function($field){
             return $field->seeCallback && !($field->seeCallback)(request());
-        })->map(function ($value) {
-            return ['component' => get_class($value), 'label' => $value->name, 'options' => $value->meta, 'rules' => $value->rules, 'attribute' => $value->attribute];
+        })->map(function ($value) use ($request) {
+            return [
+                'component' => get_class($value),
+                'label' => $value->name,
+                'options' => $value->meta,
+                'rules' => $value->rules,
+                'attribute' => $value->attribute,
+                'readonly' => $value->isReadonly($request),
+            ];
         })->keyBy('attribute');
     }
 
